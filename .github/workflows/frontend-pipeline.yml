@@ -1,0 +1,94 @@
+name: Frontend CI/CD to EKS
+
+# Trigger conditions: push and pull request
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+# Required for OIDC authentication
+permissions:
+  id-token: write   # Required to request JWT token from GitHub
+  contents: read    # Required to checkout code
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      # STEP 1: Checkout Code
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      # STEP 2: Configure AWS Credentials via OIDC
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      
+      # STEP 3: Login to Amazon ECR
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      
+      # STEP 4: Build Docker Image
+      - name: Build Docker image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+          # Use commit SHA as image tag for traceability
+          # ssg-3tier-frontend:a1b2c3d4e5f6g7h8 instead of v1.2
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+            -f Dockerfile .
+      
+      # STEP 5: Push Image to ECR
+      - name: Push image to ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          # Push both SHA-tagged and latest
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+      
+      # STEP 6: Update kubeconfig for EKS
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --region ${{ secrets.AWS_REGION }} \
+            --name ${{ secrets.EKS_CLUSTER_NAME }}
+      
+      # STEP 7: Deploy to EKS 
+      # Skip deployment for pull requests (build-only validation)
+      - name: Deploy to EKS
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' # ensures deployment only happens on merge to main, not on every PR.
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          # Update the deployment with new image, trigger a rolling update
+          kubectl set image deployment/frontend \
+            frontend=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          
+          # Wait for rollout to complete (max 5 minutes)
+          kubectl rollout status deployment/frontend --timeout=5m
+      
+      # STEP 8: Verify Deployment
+      - name: Verify deployment
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          echo "Deployment completed successfully!"
+          echo "Current pods:"
+          kubectl get pods -l app=frontend
+          echo "Deployed image:"
+          kubectl describe deployment frontend | grep Image
