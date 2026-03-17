@@ -29,12 +29,9 @@ jobs:
         with:
           node-version: '22'
 
-      # STEP 3: Setup pnpm
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10 
+      # STEP 3: Enable pnpm via Corepack (built into Node.js 22)
+      - name: Enable Corepack
+        run: corepack enable
 
       # STEP 4: Install dependencies 
       
