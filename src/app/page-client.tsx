@@ -26,7 +26,10 @@ export default function HomeClient({ instanceInfo }: HomeClientProps) {
               clean, observable flow.
             </Typography>
             <Typography variant="body2" color="text.secondary">
-              Author: Emmanuel Romero
+              Application Author: Emmanuel Romero
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              Cloud Infra Author: Santiago Silva
             </Typography>
           </Stack>
 
