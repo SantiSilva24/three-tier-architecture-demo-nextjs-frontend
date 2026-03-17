@@ -28,9 +28,9 @@ export default function HomeClient({ instanceInfo }: HomeClientProps) {
             <Typography variant="body2" color="text.secondary">
               Application Author: Emmanuel Romero
             </Typography>
-            <Typography variant="body2" color="text.secondary">
+{/*             <Typography variant="body2" color="text.secondary">
               Cloud Infra Author: Santiago Silva
-            </Typography>
+            </Typography> */}
           </Stack>
 
           <TierConnectivityStepper frontendInstance={instanceInfo} />
