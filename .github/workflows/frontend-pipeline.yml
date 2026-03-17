@@ -11,31 +11,50 @@ on:
 
 # Required for OIDC authentication
 permissions:
-  id-token: write   # Required to request JWT token from GitHub
-  contents: read    # Required to checkout code
+  id-token: write   # Allows workflow to request a JWT token from GitHub
+  contents: read    # Allows workflow to read repository code, required to checkout code
 
 jobs:
-  build-and-deploy:
+  build-and-deploy: # job name
     runs-on: ubuntu-latest
     
     steps:
-      # STEP 1: Checkout Code
+      # STEP 1: Checkout code - Downloads repository code to the GitHub Actions runner
       - name: Checkout code
         uses: actions/checkout@v4
+
+      # STEP 2: Setup Node.js for testing
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
       
-      # STEP 2: Configure AWS Credentials via OIDC
+      - name: Install dependencies
+        run: |
+          npm install -g pnpm
+          pnpm install --frozen-lockfile
+      
+      # STEP 3: Run Tests (Fail Fast)
+      - name: Run tests
+        run: pnpm test
+
+      # If tests fail, workflow stops here 
+      # No point building and deploying broken code
+      
+      # STEP 2: Configure AWS credentials - Authenticates the workflow to AWS using OIDC
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_REGION }}
       
-      # STEP 3: Login to Amazon ECR
-      - name: Login to Amazon ECR
+      # STEP 3: Login to ECR - Authenticates Docker to push/pull images from ECR
+      - name: Login to ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
       
-      # STEP 4: Build Docker Image
+      # STEP 4: Build Docker image
       - name: Build Docker image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
@@ -46,10 +65,9 @@ jobs:
         run: |
           docker build \
             -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
-            -t $ECR_REGISTRY/$ECR_REPOSITORY:latest \
             -f Dockerfile .
       
-      # STEP 5: Push Image to ECR
+      # STEP 5: Push image to ECR
       - name: Push image to ECR
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
@@ -58,14 +76,13 @@ jobs:
         run: |
           # Push both SHA-tagged and latest
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
       
-      # STEP 6: Update kubeconfig for EKS
+      # STEP 6: Update kubeconfig for EKS - Configures kubectl to communicate with EKS cluster
+      # EKS validates token against IAM (via aws-auth ConfigMap)
       - name: Update kubeconfig
         run: |
           aws eks update-kubeconfig \
-            --region ${{ secrets.AWS_REGION }} \
-            --name ${{ secrets.EKS_CLUSTER_NAME }}
+            --region ${{ secrets.AWS_REGION }} --name ${{ secrets.EKS_CLUSTER_NAME }}
       
       # STEP 7: Deploy to EKS 
       # Skip deployment for pull requests (build-only validation)
@@ -83,7 +100,7 @@ jobs:
           # Wait for rollout to complete (max 5 minutes)
           kubectl rollout status deployment/frontend --timeout=5m
       
-      # STEP 8: Verify Deployment
+      # STEP 8: Verify deployment
       - name: Verify deployment
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
